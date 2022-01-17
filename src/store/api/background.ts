@@ -1,44 +1,122 @@
 import { BaseQueryFn, createApi } from "@reduxjs/toolkit/query/react";
-import type { Api } from "../../background";
 
-type Unionize<T> = T[keyof T];
+type KeysNotOfType<T, U> = {
+  [P in keyof T]: T[P] extends U ? never : P;
+}[keyof T];
 
-type ApiArgs<T extends Api> = Unionize<{
-  [K in keyof Api]: {
-    method: K;
-    args: Parameters<T[K]>;
-  };
-}>;
+/**
+ * Filter out keys of T to only those that extend type U.
+ */
+export type OmitAllButType<T, U> = Pick<
+  T,
+  Exclude<keyof T, KeysNotOfType<T, U>>
+>;
 
-type QueryArgs = ApiArgs<Api>;
-
-export const backgroundBaseQuery: BaseQueryFn<QueryArgs> = async (message) => {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage(message, (res) => {
-      console.log("res:", res);
-      resolve({ data: res });
-    });
-  });
+export const backgroundBaseQuery: BaseQueryFn = async (message) => {
+  return { data: undefined };
 };
 
 export const backgroundApi = createApi({
   baseQuery: backgroundBaseQuery,
   endpoints: (build) => ({
-    getTabs: build.query<Awaited<ReturnType<Api["getTabs"]>>, void>({
-      query: () => ({
-        method: "getTabs",
-        args: [],
-      }),
+    tabs: build.query<chrome.tabs.Tab[], void>({
+      queryFn: async () => {
+        const data = await chrome.tabs.query({});
+        return { data };
+      },
+      onCacheEntryAdded: async (
+        arg,
+        { cacheDataLoaded, cacheEntryRemoved, dispatch }
+      ) => {
+        const action = backgroundApi.endpoints.tabs.initiate(arg, {
+          forceRefetch: true,
+        });
+
+        const listener = () => void dispatch(action);
+        const events: (keyof OmitAllButType<
+          typeof chrome.tabs,
+          chrome.events.Event<any>
+        >)[] = ["onCreated", "onRemoved"];
+
+        try {
+          await cacheDataLoaded;
+          events.forEach((event) => chrome.tabs[event].addListener(listener));
+        } catch {
+          // ignore
+        }
+
+        await cacheEntryRemoved;
+
+        events.forEach((event) => {
+          chrome.tabs[event].removeListener(listener);
+        });
+      },
     }),
-    openTab: build.mutation<void, Parameters<Api["openTab"]>>({
-      query: (arg) => {
-        return {
-          method: "openTab",
-          args: [arg[0]],
-        };
+    currentWindow: build.query<chrome.windows.Window, void>({
+      queryFn: async () => {
+        const data = await chrome.windows.getCurrent();
+        return { data };
+      },
+    }),
+    tabGroups: build.query<chrome.tabGroups.TabGroup[], void>({
+      queryFn: async () => {
+        const data = await chrome.tabGroups.query({});
+        return { data };
+      },
+    }),
+    openTab: build.mutation<
+      void,
+      { tab: chrome.tabs.Tab; bringTabToWindow?: boolean }
+    >({
+      queryFn: async ({ tab, bringTabToWindow }) => {
+        if (!tab.id) {
+          return { data: undefined };
+        }
+
+        if (bringTabToWindow) {
+          const curWindow = await chrome.windows.getCurrent();
+
+          chrome.tabs.move(tab.id, {
+            windowId: curWindow.id,
+            index: -1,
+          });
+
+          chrome.tabs.update(tab.id, {
+            active: true,
+            highlighted: true,
+          });
+        } else {
+          chrome.tabs.update(tab.id, {
+            active: true,
+            highlighted: true,
+          });
+
+          chrome.windows.update(tab.windowId, {
+            focused: true,
+          });
+        }
+
+        return { data: undefined };
+      },
+    }),
+    closeTab: build.mutation<boolean, chrome.tabs.Tab>({
+      queryFn: async (tab) => {
+        if (!tab.id) {
+          return { data: false };
+        }
+
+        chrome.tabs.remove(tab.id);
+
+        return { data: true };
       },
     }),
   }),
 });
 
-export const { useGetTabsQuery, useOpenTabMutation } = backgroundApi;
+export const {
+  useTabsQuery,
+  useOpenTabMutation,
+  useCurrentWindowQuery,
+  useTabGroupsQuery,
+  useCloseTabMutation,
+} = backgroundApi;

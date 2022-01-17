@@ -3,7 +3,6 @@ const CopyPlugin = require("copy-webpack-plugin");
 
 module.exports = {
   entry: {
-    background: "./src/background.ts",
     overlay: "./src/App.tsx",
   },
   module: {
@@ -29,7 +28,15 @@ module.exports = {
   },
   plugins: [
     new CopyPlugin({
-      patterns: [{ from: path.resolve(__dirname, "src", "manifest.json") }],
+      patterns: [
+        { from: path.resolve(__dirname, "src", "manifest.json") },
+        {
+          from: path.resolve(__dirname, "src", "popup.html"),
+        },
+        {
+          from: path.resolve(__dirname, "src", "popup.css"),
+        },
+      ],
       options: {
         concurrency: 100,
       },

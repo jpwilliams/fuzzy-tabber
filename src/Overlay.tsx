@@ -2,19 +2,49 @@ import { Searcher, sortKind } from "fast-fuzzy";
 import React from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { TabEntry } from "./components/TabEntry";
-import { useGetTabsQuery, useOpenTabMutation } from "./store/api/background";
+import {
+  useCloseTabMutation,
+  useCurrentWindowQuery,
+  useOpenTabMutation,
+  useTabGroupsQuery,
+  useTabsQuery,
+} from "./store/api/background";
 
 export const Overlay: React.FC = () => {
-  const { data } = useGetTabsQuery();
+  const { data } = useTabsQuery();
   const [openTab] = useOpenTabMutation();
   const [selectedIndex, setSelectedIndex] = React.useState(0);
-  const container = React.useRef<HTMLDivElement | null>(null);
+  const entryContainer = React.useRef<HTMLDivElement | null>(null);
   const [searchInput, setSearchInput] = React.useState("");
+  const [lastActionWasHover, setLastActionWasHover] = React.useState(false);
+  const { data: currentWindow } = useCurrentWindowQuery();
+  const { data: tabGroups } = useTabGroupsQuery();
+  const [closeTab] = useCloseTabMutation();
+
+  React.useEffect(() => {
+    if (!lastActionWasHover) {
+      const entries = entryContainer.current?.children;
+      const entry = entries?.[selectedIndex];
+      const yOffset = -64;
+      const y =
+        (entry?.getBoundingClientRect().top ?? 0) +
+        window.pageYOffset +
+        yOffset;
+
+      window.scrollTo({
+        behavior: "smooth",
+        top: y,
+      });
+    }
+  }, [selectedIndex, lastActionWasHover]);
 
   const searcher = React.useMemo(() => {
     return new Searcher(data ?? [], {
       keySelector: (tab) => [tab.title ?? "", tab.url ?? ""].filter(Boolean),
+      // keySelector: (tab) => [tab.title ?? ""].filter(Boolean),
       sortBy: sortKind.bestMatch,
+      ignoreCase: true,
+      threshold: 0.8,
     });
   }, [data]);
 
@@ -28,18 +58,21 @@ export const Overlay: React.FC = () => {
     });
   }, [searcher, searchInput]);
 
-  const selectedTabId = React.useMemo(() => {
-    return searchedData?.[selectedIndex]?.id;
+  const selectedTab = React.useMemo(() => {
+    return searchedData?.[selectedIndex];
   }, [searchedData, selectedIndex]);
 
   React.useEffect(() => {
     setSelectedIndex(0);
+    setLastActionWasHover(false);
   }, [searchInput]);
 
   const onUpPress = React.useCallback(
     (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
+
+      setLastActionWasHover(false);
 
       setSelectedIndex((currIndex) => {
         const next = (currIndex - 1) % (searchedData ?? []).length;
@@ -54,6 +87,8 @@ export const Overlay: React.FC = () => {
       event.preventDefault();
       event.stopPropagation();
 
+      setLastActionWasHover(false);
+
       setSelectedIndex((currIndex) => {
         const next = (currIndex + 1) % (searchedData ?? []).length;
         return next;
@@ -62,31 +97,38 @@ export const Overlay: React.FC = () => {
     [searchedData]
   );
 
-  const onExit = React.useCallback(
-    (event?: KeyboardEvent | React.MouseEvent<HTMLDivElement, MouseEvent>) => {
-      const el = container.current;
+  const onCtrlDownPress = React.useCallback(
+    (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
 
-      if (!el) {
+      if (!selectedTab) {
         return;
       }
 
-      const isVisible = !el.classList.contains("invisible");
-
-      if (isVisible) {
-        event?.preventDefault();
-        event?.stopPropagation();
-        el.classList.toggle("invisible");
-      }
+      closeTab(selectedTab);
     },
-    [container]
+    [selectedTab]
   );
 
-  const selectEntry = (tabId?: number) => {
-    // alert(`Selected: ${tabId}`);
-    if (tabId) {
-      openTab([tabId]);
-    }
+  const onCtrlLeftPress = React.useCallback(
+    (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
 
+      if (selectedTab) {
+        selectEntry({ tab: selectedTab, bringTabToWindow: true });
+      }
+    },
+    [selectedTab]
+  );
+
+  const onExit = React.useCallback(() => {
+    window.close();
+  }, []);
+
+  const selectEntry = (...args: Parameters<typeof openTab>) => {
+    openTab(...args);
     onExit();
   };
 
@@ -121,7 +163,9 @@ export const Overlay: React.FC = () => {
       event.stopPropagation();
       event.preventDefault();
 
-      selectEntry(selectedTabId);
+      if (selectedTab) {
+        selectEntry({ tab: selectedTab });
+      }
     },
     {
       filterPreventDefault: true,
@@ -129,22 +173,27 @@ export const Overlay: React.FC = () => {
     }
   );
 
+  useHotkeys("ctrl+down", onCtrlDownPress, {
+    filterPreventDefault: true,
+    enableOnTags: ["INPUT"],
+  });
+
+  useHotkeys("ctrl+left", onCtrlLeftPress, {
+    filterPreventDefault: true,
+    enableOnTags: ["INPUT"],
+  });
+
   return (
-    <div
-      ref={container}
-      id="__fuzzy_tabber_app_container"
-      className="invisible fixed inset-0 z-[5000] select-none"
-    >
-      <div className="absolute inset-0 bg-black opacity-50" onClick={onExit} />
-      <div className="absolute inset-0 flex flex-col" onClick={onExit}>
-        <div className="flex items-center justify-center pt-12">
-          <div
-            className="bg-slate-800 rounded-lg shadow-2xl p-4 text-white text-sm max-w-full w-[36rem] flex flex-col"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            <div className="pb-2 mb-2 shadow flex flex-row">
+    <div className="select-none w-full h-full">
+      <div className="flex flex-col w-full h-full" onClick={onExit}>
+        <div
+          className="bg-slate-800 text-white text-sm max-w-full w-[36rem] flex flex-col overflow-hidden relative"
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          <div className="fixed pb-2 mb-2 flex flex-row w-full z-10">
+            <div className="flex-1 pt-4 bg-slate-800 px-4 flex flex-row">
               <input
                 id="__fuzzy_tabber_app_input"
                 type="text"
@@ -162,17 +211,32 @@ export const Overlay: React.FC = () => {
                 }}
               />
             </div>
-            {searchedData?.map((tab, index) => (
-              <TabEntry
-                key={index}
-                title={tab.title || "No title"}
-                url={tab.url || ""}
-                faviconUrl={tab.favIconUrl}
-                selected={index === selectedIndex}
-                onMouseEnter={() => setSelectedIndex(index)}
-                onClick={() => (tab.id ? selectEntry(tab.id) : undefined)}
-              />
-            ))}
+          </div>
+          <div className="relative w-full h-full overflow-hidden pb-2">
+            <div ref={entryContainer} className="mt-16">
+              {searchedData?.map((tab, index) => (
+                <TabEntry
+                  key={index}
+                  title={tab.title || "No title"}
+                  url={tab.url || ""}
+                  faviconUrl={tab.favIconUrl}
+                  selected={index === selectedIndex}
+                  onMouseEnter={() => {
+                    setLastActionWasHover(true);
+                    setSelectedIndex(index);
+                  }}
+                  onClick={() => (tab.id ? selectEntry({ tab }) : undefined)}
+                  differentWindow={
+                    currentWindow && tab.windowId !== currentWindow.id
+                  }
+                  tabGroup={
+                    tab.groupId
+                      ? tabGroups?.find((group) => group.id === tab.groupId)
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>

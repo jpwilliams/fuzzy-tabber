@@ -5,10 +5,7 @@ import "./global.css";
 import { Overlay } from "./Overlay";
 import { store } from "./store/store";
 
-const el = document.createElement("div");
-el.setAttribute("id", "__fuzzy_tabber_app");
-
-document.documentElement.appendChild(el);
+const el = document.getElementById("__fuzzy_tabber_app");
 
 ReactDOM.render(
   <React.StrictMode>
